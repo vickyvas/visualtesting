@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Comparison Result</title>
+</head>
+<body>
+<h2>Image Comparison Result</h2>
+
+<div>
+    <img th:src="@{${diffPath}}" alt="Difference Image" style="max-width:100%;" />
+</div>
+
+<a th:href="@{/upload}">Compare Another</a>
+</body>
+</html>
