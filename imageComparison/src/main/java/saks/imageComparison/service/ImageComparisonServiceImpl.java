@@ -1,48 +1,21 @@
 package saks.imageComparison.service;
 
 import org.springframework.stereotype.Service;
-import org.springframework.ui.Model;
-
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.RasterFormatException;
 import java.io.File;
 import java.io.IOException;
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.List;
+import java.util.ArrayList;
+import net.sourceforge.tess4j.*;
 
 @Service
 public class ImageComparisonServiceImpl implements ImageComparisonService{
 
-//    @Override
-//    public void compare(File actual, File expected, File diffOutput) throws IOException {
-//        BufferedImage img1 = ImageIO.read(actual);
-//        BufferedImage img2 = ImageIO.read(expected);
-//
-//        if (img1 == null || img2 == null) {
-//            throw new IOException("Failed to read one or both images.");
-//        }
-//
-//        int width = Math.max(img1.getWidth(), img2.getWidth());
-//        int height = Math.max(img1.getHeight(), img2.getHeight());
-//
-//        BufferedImage diffImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-//
-//        for (int y = 0; y < height; y++) {
-//            for (int x = 0; x < width; x++) {
-//                int rgb1 = (x < img1.getWidth() && y < img1.getHeight()) ? img1.getRGB(x, y) : Color.BLACK.getRGB();
-//                int rgb2 = (x < img2.getWidth() && y < img2.getHeight()) ? img2.getRGB(x, y) : Color.BLACK.getRGB();
-//
-//                if (rgb1 != rgb2) {
-//                    diffImage.setRGB(x, y, Color.RED.getRGB());
-//                } else {
-//                    diffImage.setRGB(x, y, rgb1);
-//                }
-//            }
-//        }
-//
-//        ImageIO.write(diffImage, "PNG", diffOutput);
-//    }
     private BufferedImage normalizeImage(BufferedImage img) {
         BufferedImage normalized = new BufferedImage(img.getWidth(), img.getHeight(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g = normalized.createGraphics();
@@ -108,23 +81,74 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
         g.drawImage(diff, img1.getWidth() + img2.getWidth(), labelHeight, null);
         g.dispose();
 
-        String[] writers = ImageIO.getWriterFormatNames();
-        System.out.println("Available writers:");
-        for (String w : writers) {
-            System.out.println(w);
-        }
-//        ImageIO.write(combined, "PNG", outputFile);
         boolean sideBySideWritten = ImageIO.write(combined, "png", outputFile);
         System.out.println("Side-by-side image written? " + sideBySideWritten);
+    }
 
-        boolean writeSuccess = ImageIO.write(combined, "png", outputFile);
-        System.out.println("Side-by-side write success: " + writeSuccess);
-        System.out.println("Side-by-side exists after write? " + outputFile.exists());
-        System.out.println("Side-by-side file size: " + outputFile.length());
+    // Method to extract text from specific regions only
+    private String extractTextFromDifferenceRegions(BufferedImage actualImage, BufferedImage expectedImage, List<Rectangle> differenceRegions) {
+        StringBuilder ocrResult = new StringBuilder();
 
-        File file = new File(outputFile.getAbsolutePath());
-        System.out.println("Side-by-side exists after write? " + file.exists());
-        System.out.println("Side-by-side file size: " + file.length());
+        try {
+            ITesseract tesseract = new Tesseract();
+            tesseract.setDatapath("/opt/homebrew/share/tessdata");
+            tesseract.setLanguage("eng");
+
+            int regionCount = 1;
+            for (Rectangle region : differenceRegions) {
+                try {
+                    // Add some padding to the region for better OCR
+                    int padding = 5;
+                    int x = Math.max(0, region.x - padding);
+                    int y = Math.max(0, region.y - padding);
+                    int width = Math.min(actualImage.getWidth() - x, region.width + 2 * padding);
+                    int height = Math.min(actualImage.getHeight() - y, region.height + 2 * padding);
+
+                    if (width > 0 && height > 0) {
+                        // Extract from actual image
+                        BufferedImage actualRegion = actualImage.getSubimage(x, y, width, height);
+                        String actualText = tesseract.doOCR(actualRegion).trim();
+
+                        // Extract from expected image
+                        BufferedImage expectedRegion = expectedImage.getSubimage(x, y, width, height);
+                        String expectedText = tesseract.doOCR(expectedRegion).trim();
+
+                        // Only add if there's meaningful text and they're different
+                        if (!actualText.isEmpty() || !expectedText.isEmpty()) {
+                            if (!actualText.equals(expectedText)) {
+                                ocrResult.append("=== DIFFERENCE REGION ").append(regionCount).append(" ===\n");
+                                ocrResult.append("Actual: ").append(actualText.isEmpty() ? "[No text]" : actualText).append("\n");
+                                ocrResult.append("Expected: ").append(expectedText.isEmpty() ? "[No text]" : expectedText).append("\n");
+                                ocrResult.append("Location: x=").append(region.x).append(", y=").append(region.y)
+                                        .append(", width=").append(region.width).append(", height=").append(region.height).append("\n\n");
+                                regionCount++;
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println("Error processing region " + regionCount + ": " + e.getMessage());
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "OCR initialization failed: " + e.getMessage();
+        }
+
+        return ocrResult.length() > 0 ? ocrResult.toString() : "No text differences found in the different regions.";
+    }
+
+    public String extractTextFromRegion(BufferedImage image, Rectangle region) {
+        ITesseract tesseract = new Tesseract();
+        tesseract.setDatapath("/opt/homebrew/share/tessdata");
+
+        BufferedImage subImage = image.getSubimage(region.x, region.y, region.width, region.height);
+        try {
+            return tesseract.doOCR(subImage);
+        } catch (TesseractException e) {
+            e.printStackTrace();
+            return "OCR failed";
+        }
     }
 
     public double calculateMatchScore(BufferedImage img1, BufferedImage img2, int tolerance) {
@@ -145,17 +169,11 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
         }
 
         double rawScore = 100.0 - (differingPixels * 100.0 / totalPixels);
-        // Round to 2 decimal places
-        double roundedScore = Math.round(rawScore * 100.0) / 100.0;
-
-        return roundedScore;
+        return Math.round(rawScore * 100.0) / 100.0;
     }
+
     @Override
-    public void compare(File actualFile, File expectedFile, File diffFile, File sideBySideFile) throws IOException {
-
-        System.out.println("Reading actual image: " + actualFile.getAbsolutePath());
-        System.out.println("Reading expected image: " + expectedFile.getAbsolutePath());
-
+    public String compare(File actualFile, File expectedFile, File diffFile, File sideBySideFile) throws IOException {
         BufferedImage img1 = ImageIO.read(actualFile);
         BufferedImage img2 = ImageIO.read(expectedFile);
 
@@ -169,15 +187,16 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
         BufferedImage diffImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         boolean[][] diffMap = new boolean[width][height];
         boolean hasDifference = false;
+        List<Rectangle> differenceRegions = new ArrayList<>();
 
-        // Compare pixel-by-pixel
+        // Compare pixels
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int rgb1 = (x < img1.getWidth() && y < img1.getHeight()) ? img1.getRGB(x, y) : Color.BLACK.getRGB();
                 int rgb2 = (x < img2.getWidth() && y < img2.getHeight()) ? img2.getRGB(x, y) : Color.BLACK.getRGB();
 
                 if (isPixelDifferent(rgb1, rgb2, 10)) {
-                    diffImage.setRGB(x, y, Color.MAGENTA.getRGB());
+                    diffImage.setRGB(x, y, img1.getRGB(x, y)); // Show actual image in diff regions
                     diffMap[x][y] = true;
                     hasDifference = true;
                 } else {
@@ -186,20 +205,20 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
             }
         }
 
-        // Draw red rectangles on differences
+        // Draw bounding boxes and collect difference regions
         if (hasDifference) {
             Graphics2D g = diffImage.createGraphics();
             g.setColor(Color.RED);
-            g.setStroke(new BasicStroke(10));
-
-
+            g.setStroke(new BasicStroke(4));
             boolean[][] visited = new boolean[width][height];
+
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     if (diffMap[x][y] && !visited[x][y]) {
                         Rectangle box = floodFill(diffMap, visited, x, y, width, height);
                         if (box.width * box.height > 4) {
                             g.drawRect(box.x, box.y, box.width, box.height);
+                            differenceRegions.add(box); // Collect regions for OCR
                         }
                     }
                 }
@@ -207,27 +226,22 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
             g.dispose();
         }
 
-        // Log available image writers
-        String[] writers = ImageIO.getWriterFormatNames();
-        System.out.println("Available writers:");
-        for (String writer : writers) {
-            System.out.println(writer);
-        }
-
-        // Normalize and write diff image
-        System.out.println("Writing diff image to: " + diffFile.getAbsolutePath());
+        // Write difference image
         diffImage = normalizeImage(diffImage);
-        boolean diffWritten = ImageIO.write(diffImage, "png", diffFile);
-        System.out.println("Diff written successfully? " + diffWritten);
+        ImageIO.write(diffImage, "png", diffFile);
 
-        // Generate and write side-by-side image
-        System.out.println("Writing side-by-side image to: " + sideBySideFile.getAbsolutePath());
+        // Generate side-by-side view
         generateSideBySide(img1, img2, diffImage, sideBySideFile);
 
-        // Verify side-by-side image
-        System.out.println("Post-side-by-side generation check:");
-        System.out.println("Side-by-side exists? " + sideBySideFile.exists());
-        System.out.println("Side-by-side file size: " + sideBySideFile.length());
-    }
+        // Extract OCR text only from difference regions
+        String ocrResult = "";
+        if (!differenceRegions.isEmpty()) {
+            ocrResult = extractTextFromDifferenceRegions(img1, img2, differenceRegions);
+            System.out.println("Extracted OCR Text from Difference Regions:\n" + ocrResult);
+        } else {
+            ocrResult = "No differences found between images.";
+        }
 
+        return ocrResult;
+    }
 }

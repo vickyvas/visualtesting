@@ -142,6 +142,11 @@
                 <p th:text="${error}"></p>
             </div>
         </div>
+
+        <div th:if="${ocrText != null}">
+            <h4 class="text-secondary">Extracted OCR Differences</h4>
+            <pre th:text="${ocrText}" class="bg-light p-3 border rounded"></pre>
+        </div>
     </div>
 </div>
 </body>

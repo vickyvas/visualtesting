@@ -49,8 +49,10 @@ public class ImageController {
             System.out.println("Diff exists: " + diffFile.exists());
             System.out.println("Side-by-side exists: " + sideBySideFile.exists());
 
+            String ocrText = imageComparisonService.compare(actualPath.toFile(), expectedPath.toFile(), diffFile, sideBySideFile);
+
             // Perform comparison
-            imageComparisonService.compare(actualPath.toFile(), expectedPath.toFile(), diffFile, sideBySideFile);
+//            imageComparisonService.compare(actualPath.toFile(), expectedPath.toFile(), diffFile, sideBySideFile);
 
             // Calculate match score
             BufferedImage img1 = ImageIO.read(actualPath.toFile());
@@ -64,6 +66,7 @@ public class ImageController {
             model.addAttribute("expectedImagePath", "/uploads/expected.jpg");
             model.addAttribute("differenceImagePath", "/uploads/difference.png");
             model.addAttribute("differenceFound", true);
+            model.addAttribute("ocrText", ocrText);
 
             return "upload";
 
