@@ -85,6 +85,38 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
         System.out.println("Side-by-side image written? " + sideBySideWritten);
     }
 
+    private List<Rectangle> mergeCloseRectangles(List<Rectangle> rectangles, int threshold) {
+        List<Rectangle> merged = new ArrayList<>();
+        boolean[] used = new boolean[rectangles.size()];
+
+        for (int i = 0; i < rectangles.size(); i++) {
+            if (used[i]) continue;
+
+            Rectangle current = new Rectangle(rectangles.get(i));
+            used[i] = true;
+
+            for (int j = i + 1; j < rectangles.size(); j++) {
+                if (used[j]) continue;
+
+                Rectangle other = rectangles.get(j);
+                if (isCloseOrOverlapping(current, other, threshold)) {
+                    current = current.union(other);
+                    used[j] = true;
+                    j = i; // Restart loop to recheck all rectangles after merge
+                }
+            }
+
+            merged.add(current);
+        }
+
+        return merged;
+    }
+
+    private boolean isCloseOrOverlapping(Rectangle r1, Rectangle r2, int threshold) {
+        Rectangle expanded = new Rectangle(r1.x - threshold, r1.y - threshold, r1.width + 2 * threshold, r1.height + 2 * threshold);
+        return expanded.intersects(r2);
+    }
+
     // Method to extract text from specific regions only
     private String extractTextFromDifferenceRegions(BufferedImage actualImage, BufferedImage expectedImage, List<Rectangle> differenceRegions) {
         StringBuilder ocrResult = new StringBuilder();
@@ -93,35 +125,36 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
             ITesseract tesseract = new Tesseract();
             tesseract.setDatapath("/opt/homebrew/share/tessdata");
             tesseract.setLanguage("eng");
+//            tesseract.setOcrEngineMode(ITessAPI.TessOcrEngineMode.OEM_LSTM_ONLY);
+            tesseract.setTessVariable("user_defined_dpi", "400");
+//            tesseract.setTessVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789' ");
+
+            // Step 1: Merge overlapping or nearby rectangles
+            List<Rectangle> mergedRegions = mergeCloseRectangles(differenceRegions, 15); // 15px threshold
 
             int regionCount = 1;
-            for (Rectangle region : differenceRegions) {
+            for (Rectangle region : mergedRegions) {
                 try {
-                    // Add some padding to the region for better OCR
-                    int padding = 5;
+                    int padding = 10;
                     int x = Math.max(0, region.x - padding);
                     int y = Math.max(0, region.y - padding);
                     int width = Math.min(actualImage.getWidth() - x, region.width + 2 * padding);
                     int height = Math.min(actualImage.getHeight() - y, region.height + 2 * padding);
 
                     if (width > 0 && height > 0) {
-                        // Extract from actual image
                         BufferedImage actualRegion = actualImage.getSubimage(x, y, width, height);
-                        String actualText = tesseract.doOCR(actualRegion).trim();
-
-                        // Extract from expected image
                         BufferedImage expectedRegion = expectedImage.getSubimage(x, y, width, height);
+
+                        String actualText = tesseract.doOCR(actualRegion).trim();
                         String expectedText = tesseract.doOCR(expectedRegion).trim();
 
-                        // Only add if there's meaningful text and they're different
                         if (!actualText.isEmpty() || !expectedText.isEmpty()) {
                             if (!actualText.equals(expectedText)) {
-                                ocrResult.append("=== DIFFERENCE REGION ").append(regionCount).append(" ===\n");
+                                ocrResult.append("=== DIFFERENCE REGION ").append(regionCount++).append(" ===\n");
                                 ocrResult.append("Actual: ").append(actualText.isEmpty() ? "[No text]" : actualText).append("\n");
                                 ocrResult.append("Expected: ").append(expectedText.isEmpty() ? "[No text]" : expectedText).append("\n");
                                 ocrResult.append("Location: x=").append(region.x).append(", y=").append(region.y)
                                         .append(", width=").append(region.width).append(", height=").append(region.height).append("\n\n");
-                                regionCount++;
                             }
                         }
                     }
@@ -138,18 +171,6 @@ public class ImageComparisonServiceImpl implements ImageComparisonService{
         return ocrResult.length() > 0 ? ocrResult.toString() : "No text differences found in the different regions.";
     }
 
-    public String extractTextFromRegion(BufferedImage image, Rectangle region) {
-        ITesseract tesseract = new Tesseract();
-        tesseract.setDatapath("/opt/homebrew/share/tessdata");
-
-        BufferedImage subImage = image.getSubimage(region.x, region.y, region.width, region.height);
-        try {
-            return tesseract.doOCR(subImage);
-        } catch (TesseractException e) {
-            e.printStackTrace();
-            return "OCR failed";
-        }
-    }
 
     public double calculateMatchScore(BufferedImage img1, BufferedImage img2, int tolerance) {
         int width = Math.max(img1.getWidth(), img2.getWidth());
